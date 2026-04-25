@@ -28,8 +28,10 @@ type StreamingErrorTypeCodes =
 const StreamingErrorMessages: Record<StreamingErrorTypeCodes, string> = {
   [StreamingErrorType.ServerError]: "Server error",
   [StreamingErrorType.InputValidationError]: "Input validation error",
-  [StreamingErrorType.AudioChunkDurationViolation]: "Audio chunk duration violation",
-  [StreamingErrorType.MaxSessionDurationExceeded]: "Session expired: maximum session duration exceeded",
+  [StreamingErrorType.AudioChunkDurationViolation]:
+    "Audio chunk duration violation",
+  [StreamingErrorType.MaxSessionDurationExceeded]:
+    "Session expired: maximum session duration exceeded",
   [StreamingErrorType.ConcurrencyLimitExceeded]: "Too many concurrent sessions",
   [StreamingErrorType.BadSampleRate]: "Sample rate must be a positive integer",
   [StreamingErrorType.AuthFailed]: "Not Authorized",

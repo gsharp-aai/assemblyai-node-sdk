@@ -339,7 +339,8 @@ Learn more at https://github.com/AssemblyAI/assemblyai-node-sdk/blob/main/docs/c
         );
       }
     }
-    const effective = min_turn_silence ?? min_end_of_turn_silence_when_confident;
+    const effective =
+      min_turn_silence ?? min_end_of_turn_silence_when_confident;
     const message: StreamingUpdateConfiguration = {
       type: "UpdateConfiguration",
       ...rest,
