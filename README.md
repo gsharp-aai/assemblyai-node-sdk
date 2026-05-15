@@ -2,6 +2,25 @@
 
 ---
 
+> **⚠️ Dogfooding fork — `gsharp/dual-channel` branch**
+>
+> This branch carries the in-development dual-channel streaming feature
+> (per-word `mic` / `system` attribution on top of speaker diarization). It
+> is **not published to npm** and **not for production**.
+>
+> Install directly from this branch:
+>
+> ```bash
+> npm install github:gsharp-aai/assemblyai-node-sdk#gsharp/dual-channel
+> ```
+>
+> The first install runs the SDK's build (~30 s) via a `prepare` hook so
+> `dist/` is produced locally. See
+> [`samples/streaming-dual-channel-mic-system/`](./samples/streaming-dual-channel-mic-system/)
+> for a runnable browser example.
+
+---
+
 [![npm](https://img.shields.io/npm/v/assemblyai)](https://www.npmjs.com/package/assemblyai)
 [![Test](https://github.com/AssemblyAI/assemblyai-node-sdk/actions/workflows/test.yml/badge.svg)](https://github.com/AssemblyAI/assemblyai-node-sdk/actions/workflows/test.yml)
 [![GitHub License](https://img.shields.io/github/license/AssemblyAI/assemblyai-node-sdk)](https://github.com/AssemblyAI/assemblyai-node-sdk/blob/main/LICENSE)

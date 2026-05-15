@@ -1,6 +1,6 @@
 {
   "name": "assemblyai",
-  "version": "4.33.2",
+  "version": "4.33.2-dual-channel.0",
   "description": "The AssemblyAI JavaScript SDK provides an easy-to-use interface for interacting with the AssemblyAI API, which supports async and real-time transcription, as well as the latest LeMUR models.",
   "engines": {
     "node": ">=18"
@@ -86,6 +86,8 @@
   },
   "scripts": {
     "build": "pnpm clean && pnpm rollup -c",
+    "build:npm": "rimraf dist/* && rimraf temp/* && rimraf temp-docs/* && rollup -c",
+    "prepare": "npm run build:npm",
     "clean": "rimraf dist/* && rimraf temp/* && rimraf temp-docs/*",
     "lint": "pnpm lint:eslint && pnpm lint:tsc && pnpm lint:format && pnpm lint:publint",
     "lint:eslint": "eslint -c .eslintrc.json '{src,tests}/**/*.{js,ts}'",
