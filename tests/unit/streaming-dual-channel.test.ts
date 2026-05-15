@@ -160,12 +160,13 @@ describe("StreamingTranscriber dual-channel mixing and VAD", () => {
   });
 
   it("flushes mixed mono PCM at flushIntervalMs cadence", async () => {
-    // 320 samples = 20ms at 16kHz on each channel. Both channels send the same
-    // amount, so the next flush emits 320 Int16 samples = 640 bytes of mono PCM.
-    rt.sendAudio(loudPcm(320), { channel: "mic" });
-    rt.sendAudio(silentPcm(320), { channel: "system" });
+    // 800 samples = 50ms at 16kHz on each channel — exactly the minimum the
+    // server accepts per audio message. Both channels send the same amount,
+    // so the next flush emits 800 Int16 samples = 1600 bytes of mono PCM.
+    rt.sendAudio(loudPcm(800), { channel: "mic" });
+    rt.sendAudio(silentPcm(800), { channel: "system" });
     const msg = (await server.nextMessage) as ArrayBuffer;
-    expect(msg.byteLength).toBe(320 * 2);
+    expect(msg.byteLength).toBe(800 * 2);
   });
 
   it("emits a 'vad' event per 20ms frame as PCM is ingested", () => {
@@ -224,11 +225,11 @@ describe("StreamingTranscriber dual-channel mixing and VAD", () => {
   });
 
   it("mixes per-channel PCM with /channelCount averaging", async () => {
-    // 320 samples each: mic constant +10000, system constant -10000.
-    // Average per sample = 0; mixed mono should be all zeros.
-    const micBuf = new Int16Array(320);
-    const sysBuf = new Int16Array(320);
-    for (let i = 0; i < 320; i++) {
+    // 800 samples each (50ms floor): mic constant +10000, system constant
+    // -10000. Average per sample = 0; mixed mono should be all zeros.
+    const micBuf = new Int16Array(800);
+    const sysBuf = new Int16Array(800);
+    for (let i = 0; i < 800; i++) {
       micBuf[i] = 10_000;
       sysBuf[i] = -10_000;
     }
@@ -236,14 +237,14 @@ describe("StreamingTranscriber dual-channel mixing and VAD", () => {
     rt.sendAudio(sysBuf.buffer, { channel: "system" });
     const msg = (await server.nextMessage) as ArrayBuffer;
     const mixed = new Int16Array(msg);
-    expect(mixed.length).toBe(320);
+    expect(mixed.length).toBe(800);
     for (let i = 0; i < mixed.length; i++) {
       expect(mixed[i]).toBe(0);
     }
 
     // Now: both channels at +20000 → mix should be +20000 (avg, not sum).
-    const both = new Int16Array(320);
-    for (let i = 0; i < 320; i++) both[i] = 20_000;
+    const both = new Int16Array(800);
+    for (let i = 0; i < 800; i++) both[i] = 20_000;
     rt.sendAudio(both.buffer, { channel: "mic" });
     rt.sendAudio(both.buffer, { channel: "system" });
     const msg2 = (await server.nextMessage) as ArrayBuffer;
@@ -254,17 +255,18 @@ describe("StreamingTranscriber dual-channel mixing and VAD", () => {
   });
 
   it("only flushes min(channel lengths); the longer channel retains its tail", async () => {
-    // Mic: 640 samples, system: 320 samples. First flush should emit 320
-    // mixed samples; the remaining 320 mic samples wait for system to catch up.
-    rt.sendAudio(loudPcm(640), { channel: "mic" });
-    rt.sendAudio(silentPcm(320), { channel: "system" });
+    // Mic: 1600 samples, system: 800 samples (both ≥ the 50ms floor). First
+    // flush should emit 800 mixed samples; the remaining 800 mic samples wait
+    // for system to catch up.
+    rt.sendAudio(loudPcm(1600), { channel: "mic" });
+    rt.sendAudio(silentPcm(800), { channel: "system" });
     const first = (await server.nextMessage) as ArrayBuffer;
-    expect(first.byteLength).toBe(320 * 2);
+    expect(first.byteLength).toBe(800 * 2);
 
-    // Now feed 320 more on system → second flush of 320 mixed samples.
-    rt.sendAudio(silentPcm(320), { channel: "system" });
+    // Now feed 800 more on system → second flush of 800 mixed samples.
+    rt.sendAudio(silentPcm(800), { channel: "system" });
     const second = (await server.nextMessage) as ArrayBuffer;
-    expect(second.byteLength).toBe(320 * 2);
+    expect(second.byteLength).toBe(800 * 2);
   });
 
   it("aggregates samples across sendAudio calls into a single VAD frame", () => {
@@ -280,16 +282,30 @@ describe("StreamingTranscriber dual-channel mixing and VAD", () => {
     expect(mic[0].ts).toBeCloseTo(20, 1); // 320 / 16000 * 1000
   });
 
-  it("produces multiple sequential flushes as new PCM arrives", async () => {
+  it("withholds sub-50ms flushes until enough audio accumulates", async () => {
+    // 320 samples = 20ms — below the server's 50ms floor. The mixer should
+    // hold them in the per-channel buffers and NOT emit a message yet.
     rt.sendAudio(loudPcm(320), { channel: "mic" });
     rt.sendAudio(silentPcm(320), { channel: "system" });
-    const a = (await server.nextMessage) as ArrayBuffer;
-    expect(a.byteLength).toBe(320 * 2);
+    // Top each channel up to exactly 50ms (320 + 480 = 800 samples). Now the
+    // floor is met and the next flush emits 800 samples — and only those 800.
+    rt.sendAudio(loudPcm(480), { channel: "mic" });
+    rt.sendAudio(silentPcm(480), { channel: "system" });
 
-    rt.sendAudio(loudPcm(320), { channel: "mic" });
-    rt.sendAudio(silentPcm(320), { channel: "system" });
+    const msg = (await server.nextMessage) as ArrayBuffer;
+    expect(msg.byteLength).toBe(800 * 2);
+  });
+
+  it("produces multiple sequential flushes as new PCM arrives", async () => {
+    rt.sendAudio(loudPcm(800), { channel: "mic" });
+    rt.sendAudio(silentPcm(800), { channel: "system" });
+    const a = (await server.nextMessage) as ArrayBuffer;
+    expect(a.byteLength).toBe(800 * 2);
+
+    rt.sendAudio(loudPcm(800), { channel: "mic" });
+    rt.sendAudio(silentPcm(800), { channel: "system" });
     const b = (await server.nextMessage) as ArrayBuffer;
-    expect(b.byteLength).toBe(320 * 2);
+    expect(b.byteLength).toBe(800 * 2);
   });
 
   it("caps each emitted chunk at MAX_CHUNK_MS even with a large backlog", async () => {

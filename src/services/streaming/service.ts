@@ -70,6 +70,15 @@ const terminateSessionMessage = `{"type":"Terminate"}`;
  */
 const MAX_CHUNK_MS = 200;
 
+/**
+ * Per-send minimum chunk size in milliseconds. The streaming server also
+ * rejects audio messages shorter than 50 ms with the same `Input Duration
+ * Error`, so the mixer waits until both per-channel buffers have at least
+ * this much accumulated before emitting. Final-flush (close path) bypasses
+ * this floor so the trailing partial buffer still gets sent.
+ */
+const MIN_CHUNK_MS = 50;
+
 type BufferLike =
   | string
   | Buffer
@@ -109,6 +118,7 @@ export class StreamingTranscriber {
   private flushTimer?: ReturnType<typeof setInterval>;
   private attributionParams?: Required<ChannelAttributionParams>;
   private vadFrameSamples = 0;
+  private minChunkSamples = 0;
   private maxChunkSamples = 0;
   // For resolveUnknownChannelsMethod === "speaker-history": per-speaker_label
   // cumulative active-VAD RMS per channel. Allocated only when that method is
@@ -160,8 +170,12 @@ export class StreamingTranscriber {
       }
       // 20 ms VAD frames at the transcriber's target sample rate.
       this.vadFrameSamples = Math.max(1, Math.round(params.sampleRate * 0.02));
-      this.maxChunkSamples = Math.max(
+      this.minChunkSamples = Math.max(
         1,
+        Math.round(params.sampleRate * (MIN_CHUNK_MS / 1000)),
+      );
+      this.maxChunkSamples = Math.max(
+        this.minChunkSamples,
         Math.round(params.sampleRate * (MAX_CHUNK_MS / 1000)),
       );
       this.channelBuffers = new Map(names.map((n) => [n, [] as number[]]));
@@ -593,7 +607,7 @@ Learn more at https://github.com/AssemblyAI/assemblyai-node-sdk/blob/main/docs/c
     );
   }
 
-  private flushMix() {
+  private flushMix(force = false) {
     if (!this.channelNames || !this.channelBuffers) return;
     const bufs = this.channelNames.map((n) => this.channelBuffers!.get(n)!);
     const divisor = bufs.length;
@@ -605,6 +619,12 @@ Learn more at https://github.com/AssemblyAI/assemblyai-node-sdk/blob/main/docs/c
       let mixLen = Infinity;
       for (const b of bufs) if (b.length < mixLen) mixLen = b.length;
       if (!Number.isFinite(mixLen) || mixLen === 0) return;
+      // The streaming server rejects audio messages shorter than 50 ms with
+      // `Input Duration Error`. Wait until both per-channel buffers have at
+      // least minChunkSamples worth queued before emitting. The `force` path
+      // (final flush on close) bypasses this so the trailing partial buffer
+      // still gets through.
+      if (!force && mixLen < this.minChunkSamples) return;
       if (mixLen > this.maxChunkSamples) mixLen = this.maxChunkSamples;
       const out = new Int16Array(mixLen);
       for (let i = 0; i < mixLen; i++) {
@@ -795,7 +815,10 @@ Learn more at https://github.com/AssemblyAI/assemblyai-node-sdk/blob/main/docs/c
       clearInterval(this.flushTimer);
       this.flushTimer = undefined;
       // Best-effort: drain any final partial mix so the server gets the tail.
-      this.flushMix();
+      // Bypass the 50ms floor here since this is the last flush; if the tail
+      // is <50ms the server will reject that single message, but we'd lose
+      // the audio either way.
+      this.flushMix(true);
     }
     if (this.socket) {
       if (this.socket.readyState === this.socket.OPEN) {
