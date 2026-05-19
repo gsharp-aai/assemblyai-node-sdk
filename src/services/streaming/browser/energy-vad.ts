@@ -65,7 +65,7 @@ export class EnergyVad implements VadDetector {
         rms * this.noiseFloorAlpha;
     }
 
-    return { active, energy: rms };
+    return { active, energy: rms, noiseFloor: this.noiseFloor };
   }
 
   reset(): void {

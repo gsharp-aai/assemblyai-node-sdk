@@ -587,6 +587,7 @@ Learn more at https://github.com/AssemblyAI/assemblyai-node-sdk/blob/main/docs/c
           channel: name,
           active: result.active,
           rms: result.energy,
+          noiseFloor: result.noiseFloor,
         };
         this.timeline!.pushFrame(frame);
         this.listeners.vad?.(frame);

@@ -54,8 +54,29 @@ export class VadTimeline {
 }
 
 /**
- * Sum per-channel active RMS over a window. Returns a Map from channel name
- * to total score. Channels with zero score are omitted.
+ * Pad each side of the word's `[start, end]` window by this many ms when
+ * scoring VAD frames. Two reasons:
+ *  - Short words (e.g. 16-33 ms function words) span only 1-2 VAD frames at
+ *    20 ms cadence, so missing one frame on one channel skews scoring badly.
+ *  - Per-channel VAD frames can be pushed to the timeline slightly later than
+ *    the streaming server emits its corresponding Turn message, leaving the
+ *    exact word window short some frames at attribution time. Padding pulls
+ *    in surrounding frames that are almost always from the same speaker.
+ *
+ * 50 ms = ~2 extra frames each side, enough to bridge per-channel `sendAudio`
+ * ordering jitter without reaching far into neighboring-utterance silence.
+ */
+const ATTRIBUTION_WINDOW_PAD_MS = 50;
+
+/**
+ * Sum per-channel `rms` over **active-only** frames. Channels with no active
+ * frames in the window are omitted (their absence is what triggers the
+ * `"unknown"` return path in `attributeWord`).
+ *
+ * Active-only matters: a quiet-but-noisy ambient channel can have non-zero
+ * raw RMS over a word window even when nothing was actually spoken there;
+ * gating on `active` keeps that ambient noise from outscoring genuine speech
+ * on the other channel.
  */
 function scoreChannels(frames: VadFrame[]): Map<string, number> {
   const scores = new Map<string, number>();
@@ -67,27 +88,42 @@ function scoreChannels(frames: VadFrame[]): Map<string, number> {
 }
 
 /**
+ * Decide which channel was dominant during a word's window. Returns the top
+ * channel if it beats the runner-up by at least `dominanceRatio`; otherwise
+ * `null`. Empty / single-entry maps are handled explicitly so a single
+ * active channel always wins outright.
+ */
+function pickDominant(
+  scores: Map<string, number>,
+  dominanceRatio: number,
+): Channel | null {
+  if (scores.size === 0) return null;
+  const sorted = [...scores.entries()].sort((a, b) => b[1] - a[1]);
+  if (sorted.length === 1) return sorted[0][0];
+  const [topName, topScore] = sorted[0];
+  const [, runnerScore] = sorted[1];
+  if (topScore >= dominanceRatio * runnerScore) return topName;
+  return null;
+}
+
+/**
  * Decide which channel was dominant during a word's `[start, end]` window.
- *
- * - If no channel has any active VAD energy → `"unknown"`.
- * - If the top channel beats the runner-up by at least `dominanceRatio` → top channel.
- * - Else: top channel wins on absolute score; exact ties → `"unknown"`.
+ * Scores active VAD frames in the padded window; the top-scoring channel
+ * wins if it beats the runner-up by at least `dominanceRatio`, else returns
+ * `"unknown"` so the downstream window resolver can fill the word from
+ * neighbor context.
  */
 export function attributeWord(
   word: StreamingWord,
   timeline: VadTimeline,
   params: LabelMapperParams,
 ): Channel {
-  const scores = scoreChannels(timeline.framesInWindow(word.start, word.end));
-  if (scores.size === 0) return "unknown";
-  const sorted = [...scores.entries()].sort((a, b) => b[1] - a[1]);
-  if (sorted.length === 1) return sorted[0][0];
-  const [topName, topScore] = sorted[0];
-  const [runnerName, runnerScore] = sorted[1];
-  if (topScore >= params.dominanceRatio * runnerScore) return topName;
-  if (topScore > runnerScore) return topName;
-  if (runnerScore > topScore) return runnerName;
-  return "unknown";
+  const framesInWin = timeline.framesInWindow(
+    word.start - ATTRIBUTION_WINDOW_PAD_MS,
+    word.end + ATTRIBUTION_WINDOW_PAD_MS,
+  );
+  const scores = scoreChannels(framesInWin);
+  return pickDominant(scores, params.dominanceRatio) ?? "unknown";
 }
 
 /**

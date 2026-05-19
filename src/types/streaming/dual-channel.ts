@@ -21,11 +21,20 @@ export type VadFrame = {
   channel: string;
   active: boolean;
   rms: number;
+  /**
+   * Adaptive noise-floor estimate at the time of this frame, if the
+   * underlying `VadDetector` publishes one. Used internally by the VAD to
+   * decide whether a frame is "active" (rms > floor * thresholdRatio).
+   * Optional because not every detector tracks a floor (e.g. DNN VADs).
+   */
+  noiseFloor?: number;
 };
 
 export type VadDetectorResult = {
   active: boolean;
   energy: number;
+  /** See `VadFrame.noiseFloor`. Optional. */
+  noiseFloor?: number;
 };
 
 /**
