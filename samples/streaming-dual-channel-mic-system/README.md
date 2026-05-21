@@ -117,7 +117,120 @@ mono stream. Either change is a real boundary.
   through the loopback device to make it available.
 - **Windows:** sharing the whole screen via the picker exposes full system
   audio; sharing only a tab exposes just that tab's audio.
-- **Speakers vs. headphones:** the energy-based VAD will misattribute when the
-  mic acoustically picks up the speaker playback. Use headphones, or plug in
-  a DNN-based VAD via `channelAttribution.createVad` which is more robust to
-  leak.
+
+## Speakers + open mic: apply echo cancellation at capture
+
+When the user listens to system audio through **speakers** (rather than
+headphones) and their mic is open, the mic physically picks up the speaker
+playback. The two channels then carry highly-correlated audio at similar
+amplitudes, and the energy-based attribution can't reliably tell apart
+"real mic speech" from "speakers played into mic."
+
+**Transcription accuracy is unaffected** — AAI still transcribes what was
+said. What's affected is **per-word channel attribution**: words that
+actually came from system audio may be tagged as `mic`. If you don't use
+the per-word `channel` field downstream, you can ignore this. If you do —
+for instance, to render `[mic]` / `[sys]` prefixes in a transcript UI —
+apply echo cancellation **at the capture layer**, before audio reaches
+the SDK. Two examples below.
+
+### Example 1: Browser (`getUserMedia` with built-in AEC)
+
+If you're capturing in the browser (like this sample app does),
+`getUserMedia` already exposes Chrome's WebRTC AEC. Pass
+`echoCancellation: true` when requesting the mic stream:
+
+```ts
+const micStream = await navigator.mediaDevices.getUserMedia({
+  audio: {
+    echoCancellation: true,    // Subtracts speaker playback from mic.
+    noiseSuppression: true,    // Optional: cleaner ambient.
+    autoGainControl: true,     // Optional: smooths mic level.
+  },
+});
+
+// Then hand the cleaned stream to the SDK as the mic channel.
+const capture = new DualChannelCapture({
+  micStream,
+  systemStream,            // from getDisplayMedia({audio: true})
+  transcriber,
+});
+```
+
+This is what the browser sample app already does — it's why `[mic]`
+attribution works correctly even with speakers playing into the mic.
+
+### Example 2: Native / Node (swap in a DNN VAD via `createVad`)
+
+In server-side or native runtimes (Node, Electron, the Swift helpers
+behind native CLIs, etc.) there is no `getUserMedia`. The right answer is
+still to do echo cancellation **at capture** — macOS has
+`AVAudioEngine.setVoiceProcessingEnabled(true)`, Linux has PulseAudio's
+`module-echo-cancel`, telephony stacks usually have it in the codec.
+**Use what your capture layer provides.**
+
+If platform-level AEC isn't available, the next-best option is to plug
+in a DNN voice-activity detector via `channelAttribution.createVad`. A
+DNN VAD distinguishes "real speech" from "playback that the mic
+recaptured" using spectral characteristics (rather than energy), so it's
+much more robust to speaker leak. [Silero VAD](https://github.com/snakers4/silero-vad)
+is the typical choice; the [`@ricky0123/vad`](https://www.npmjs.com/package/@ricky0123/vad)
+package bundles it for browser and Node.
+
+```ts
+import { MicVAD } from "@ricky0123/vad-web";
+import type { VadDetector, VadDetectorResult } from "assemblyai";
+
+// Adapter: wrap a Silero session as the SDK's VadDetector interface.
+class SileroVad implements VadDetector {
+  constructor(private readonly speechProb: () => number) {}
+  process(frame: Float32Array): VadDetectorResult {
+    const p = this.speechProb();
+    let sumSq = 0;
+    for (let i = 0; i < frame.length; i++) sumSq += frame[i] * frame[i];
+    const rms = Math.sqrt(sumSq / Math.max(1, frame.length));
+    return { active: p > 0.5, energy: rms };
+  }
+  reset(): void {}
+}
+
+// One MicVAD per channel.
+const micVad = await MicVAD.new({ /* ... */ });
+const systemVad = await MicVAD.new({ /* ... */ });
+
+const transcriber = client.streaming.transcriber({
+  speechModel: "u3-rt-pro",
+  sampleRate: 16_000,
+  channels: [{ name: "mic" }, { name: "system" }],
+  channelAttribution: {
+    createVad: (channelName) =>
+      new SileroVad(
+        channelName === "mic"
+          ? () => micVad.lastSpeechProb()
+          : () => systemVad.lastSpeechProb(),
+      ),
+  },
+});
+```
+
+The factory is called once per declared channel at transcriber
+construction time, so it's a clean place to wire each channel's VAD to
+its own Silero session.
+
+### Why the SDK can't ship AEC itself
+
+Echo cancellation belongs at the capture layer — the moment audio enters
+your application — because:
+
+1. Every platform (browser, macOS, iOS, Linux, Windows, telephony) has
+   its own AEC implementation tuned for its own audio stack. The SDK
+   only sees PCM after capture, by which point platform-specific delay
+   compensation and double-talk handling are out of reach.
+2. A pure-JS AEC inside the SDK would re-invent what the OS / browser
+   already does well, with worse latency and worse quality.
+3. Customers' AEC needs differ. Voice agents want aggressive AEC;
+   meeting recorders want light-touch AEC that doesn't suppress
+   overlapping speech. The capture layer is where that choice is made.
+
+Channel attribution in this SDK assumes capture-layer AEC is already
+applied when speaker leak is a real concern.

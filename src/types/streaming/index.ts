@@ -119,6 +119,21 @@ export type StreamingTranscriberParams = {
    *
    * Must contain exactly 2 entries with unique names. The names are echoed back in
    * `TurnEvent.channel` / `words[i].channel`.
+   *
+   * **Acoustic-leak caveat.** Per-word channel attribution uses energy-based
+   * VAD on each channel. If your capture setup lets one channel's audio bleed
+   * into another at similar amplitude — typically system audio playing
+   * through speakers and being picked up by an open mic — attribution can
+   * misfire (mic-tagged words that were actually system). Transcription
+   * quality is unaffected; only the `channel` field is. To preserve
+   * attribution in speaker-leak setups, apply echo cancellation at capture
+   * before feeding audio to the SDK. In browsers, that's
+   * `getUserMedia({ audio: { echoCancellation: true } })`. On macOS native,
+   * `AVAudioEngine.setVoiceProcessingEnabled(true)` on the input node. If
+   * platform-level AEC isn't available, swap in a DNN VAD (e.g. Silero) via
+   * `channelAttribution.createVad`. See
+   * [samples/streaming-dual-channel-mic-system](../../../samples/streaming-dual-channel-mic-system/README.md#speakers--open-mic-apply-echo-cancellation-at-capture)
+   * for worked examples.
    */
   channels?: Array<{ name: string }>;
   /** Tuning for dual-channel attribution. Ignored when `channels` is unset. */
